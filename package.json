@@ -3,7 +3,15 @@
   "version": "1.0.0",
   "bin": "index.js",
   "dependencies": {
+    "fs": "^0.0.1-security",
     "minimist": "^1.2.8",
-    "multiplex": "^6.7.0"
+    "multiplex": "^6.7.0",
+    "net": "^1.0.2"
+  },
+  "devDependencies": {
+    "pkg": "^@yao-pkg/pkg"
+  },
+  "scripts": {
+    "build": "node build.js"
   }
 }
