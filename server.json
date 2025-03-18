@@ -1,0 +1,6 @@
+{
+  "waitPort": 4777,
+  "exposedPort": 5666,
+  "password": "secret",
+  "timeout": 5000
+}
