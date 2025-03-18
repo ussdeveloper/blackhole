@@ -5,9 +5,7 @@ const net = require('net');
 const multiplex = require('multiplex');
 const minimist = require('minimist');
 
-//
 // =============== CONFIG / JSON LOADING LOGIC ===============
-//
 function fileExists(path) {
     try {
         fs.accessSync(path, fs.constants.F_OK);
@@ -80,9 +78,7 @@ function generateClientJson() {
     console.log('Example client.json created in the current directory.');
 }
 
-//
 // =============== ARG PARSING ===============
-//
 const args = minimist(process.argv.slice(2), {
     string: [
         'tele-port-to',
@@ -135,9 +131,7 @@ Generate config:
 `);
 }
 
-//
 // =============== LOGIC FOR --generate server/client ===============
-//
 if (args.generate === 'server') {
     generateServerJson();
     process.exit(0);
@@ -147,9 +141,7 @@ if (args.generate === 'client') {
     process.exit(0);
 }
 
-//
 // =============== DETERMINE MODE BASED ON ARGS OR CONFIG FILES ===============
-//
 let mode = null;        // 'server' | 'client'
 let useConfigFile = false;
 
@@ -177,17 +169,41 @@ if (!mode) {
     process.exit(1);
 }
 
-//
-// =============== RE-USE THE LOGIC FROM PREVIOUS VERSION ===============
-//
+// ================== HELPER: niceErrorLog function ==================
+function niceErrorLog(context, err) {
+    // If it's ECONNRESET, print a simpler message
+    if (err && err.code === 'ECONNRESET') {
+        console.log(`[${context}] Remote side closed the connection forcibly (ECONNRESET). Code: ${err.code}`);
+    } else {
+        // Otherwise, show code (if present) and message
+        console.error(`[${context}] Socket error ${err.code ? '[' + err.code + ']' : ''}: ${err.message || err}`);
+    }
+}
+
+// =============== SERVER SETUP FUNCTION ===============
 function setupTunnel(plex, controlSocket, exposedPort, serverTimeout) {
     const exposedServer = net.createServer((clientSocket) => {
         console.log('Incoming connection on exposed port.');
+
+        // Create a new stream in the multiplex
         const plexStream = plex.createStream();
+
+        // Tunnel data
         clientSocket.pipe(plexStream).pipe(clientSocket);
 
+        // Log close event
         plexStream.on('close', () => {
             console.log('Tunnel closed for one client connection.');
+        });
+
+        // Catch errors on the clientSocket
+        clientSocket.on('error', (err) => {
+            niceErrorLog('Exposed server clientSocket', err);
+        });
+
+        // Catch errors on the plexStream
+        plexStream.on('error', (err) => {
+            niceErrorLog('Plex stream', err);
         });
     });
 
@@ -195,6 +211,7 @@ function setupTunnel(plex, controlSocket, exposedPort, serverTimeout) {
         console.log(`Exposed server is listening on port ${exposedPort}`);
     });
 
+    // Handle control socket close with a timeout
     controlSocket.on('close', () => {
         console.log(`Client disconnected. Will wait up to ${serverTimeout}ms before closing the exposed port...`);
         setTimeout(() => {
@@ -203,14 +220,13 @@ function setupTunnel(plex, controlSocket, exposedPort, serverTimeout) {
         }, serverTimeout);
     });
 
+    // Handle control socket errors
     controlSocket.on('error', (err) => {
-        console.error('Control socket error:', err);
+        niceErrorLog('Control socket', err);
     });
 }
 
-//
-// =============== RUN SERVER MODE ===============
-//
+// =============== SERVER MODE ===============
 if (mode === 'server') {
     let waitPort, exposedPort, serverPassword, serverTimeout;
     
@@ -263,9 +279,12 @@ if (mode === 'server') {
                 // Auth OK – init multiplex
                 const remaining = authBuffer.substring(newlineIndex + 1);
                 const plex = multiplex();
+
+                // Optional: if any leftover data remains in the buffer
                 if (remaining.length > 0) {
                     plex.write(remaining);
                 }
+
                 controlSocket.pipe(plex).pipe(controlSocket);
                 setupTunnel(plex, controlSocket, exposedPort, serverTimeout);
             });
@@ -282,12 +301,10 @@ if (mode === 'server') {
     });
 
     controlServer.on('error', (err) => {
-        console.error('Control server error:', err);
+        niceErrorLog('Control server', err);
     });
 
-//
-// =============== RUN CLIENT MODE ===============
-//
+// =============== CLIENT MODE ===============
 } else if (mode === 'client') {
     let serverAddress, controlPort, localHost, localPort, clientPassword, clientTimeout;
 
@@ -300,7 +317,7 @@ if (mode === 'server') {
             localHost = config.teleportHost;
             localPort = config.teleportPort;
             clientPassword = config.password;
-            clientTimeout = config.timeout;
+            clientTimeout = config.timeout; // not directly used in retries, but available
         } catch (err) {
             console.error(`Failed to load client.json: ${err.message}`);
             process.exit(1);
@@ -359,18 +376,29 @@ if (mode === 'server') {
                 const localSocket = net.connect({ host: localHost, port: localPort }, () => {
                     console.log(`Connected to local service at ${localHost}:${localPort}`);
                 });
+
+                // Pipe data both ways
                 stream.pipe(localSocket).pipe(stream);
 
+                // Handle local socket errors
                 localSocket.on('error', (err) => {
-                    console.error('Local connection error:', err);
+                    niceErrorLog('Local connection', err);
                     stream.end();
+                });
+
+                // Handle errors on the tunnel stream
+                stream.on('error', (err) => {
+                    niceErrorLog('Tunnel stream', err);
+                    localSocket.end();
                 });
             });
 
+            // Handle control socket errors
             controlSocket.on('error', (err) => {
-                console.error('Control socket error:', err);
+                niceErrorLog('Control socket', err);
             });
 
+            // If the control socket closes, try reconnecting in 10s
             controlSocket.on('close', () => {
                 console.log('Control socket has closed. Will retry connection in 10 seconds...');
                 setTimeout(attemptConnection, 10000);
@@ -378,11 +406,12 @@ if (mode === 'server') {
         });
 
         controlSocket.on('error', (err) => {
-            console.error('Failed to connect to control server:', err.message);
+            console.log('Failed to connect to control server:', err.message);
             console.log('Will retry in 10 seconds...');
             setTimeout(attemptConnection, 10000);
         });
     }
 
+    // Start initial connection
     attemptConnection();
 }
