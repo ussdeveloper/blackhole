@@ -1,0 +1,9 @@
+{
+  "name": "blackhole",
+  "version": "1.0.0",
+  "bin": "index.js",
+  "dependencies": {
+    "minimist": "^1.2.8",
+    "multiplex": "^6.7.0"
+  }
+}
